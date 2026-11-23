@@ -1,0 +1,14 @@
+services:
+  planet-of-memories:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: planet-of-memories
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/data:/app/backend/data
+      - ./backend/uploads:/app/backend/uploads

@@ -21,7 +21,22 @@ polaroid-chronicle/
 └── frontend/         # React + TypeScript + Vite + Canvas 星空
 ```
 
-## 快速部署（服务器生产环境）
+## 快速部署（推荐：Docker Compose 一键运行）
+
+只需服务器安装好 Docker 与 Docker Compose，一条命令即可完成前端打包、后端启动与数据持久化：
+
+```bash
+git clone https://github.com/aewcy/Planet-of-Memories.git
+cd Planet-of-Memories
+cp backend/.env.example backend/.env
+# 编辑 backend/.env，填入 PASSCODE_MAP、ADMIN_PASSCODE 与 AI_API_KEY
+docker compose up -d --build
+```
+
+- 默认监听 `8000` 端口（可直接用 Nginx 反向代理到 `80/443` 并开启 HTTPS）。
+- 照片文件（`backend/uploads`）与数据库（`backend/data`）已通过卷挂载持久化到宿主机，更新代码重新 `docker compose up -d --build` 不会丢失数据。
+
+## 手动部署（不使用 Docker）
 
 当 `frontend/dist` 存在时，后端 FastAPI 会自动托管前端构建产物，**只需启动一个后端服务进程即可**。
 

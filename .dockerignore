@@ -1,0 +1,14 @@
+.git
+.gitignore
+README.md
+backend/.env
+backend/.venv
+backend/data
+backend/uploads
+backend/__pycache__
+**/__pycache__
+*.pyc
+frontend/node_modules
+frontend/dist
+frontend/.vite
+*.log
