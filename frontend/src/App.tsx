@@ -423,6 +423,27 @@ export default function App() {
               >
                 {savingName ? '进入中…' : '进入星空'}
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleSwitchIdentity()
+                  setNameInput('')
+                  setPasscodeInput('')
+                  setAuthError('')
+                  setShowLoginGate(true)
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  padding: '4px 8px',
+                  marginTop: 2,
+                }}
+              >
+                ← 返回重输暗号
+              </button>
             </form>
           </div>
         </div>
