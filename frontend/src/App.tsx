@@ -267,13 +267,10 @@ export default function App() {
 
   const entryStars = publicStars.length > 0 ? publicStars : AMBIENT_ENTRY_STARS
 
-  const isStarVisibleInHud = (p: PhotoItem) =>
-    !p.is_hidden ||
-    Boolean(p.is_discovered) ||
-    p.author_name === currentUser?.name ||
-    Boolean(currentUser?.is_admin)
-
-  const visiblePhotos = photos.filter(isStarVisibleInHud)
+  const normalPhotos = photos.filter((p) => !p.is_hidden)
+  const selectedPhoto =
+    selectedPhotoId !== null ? photos.find((p) => p.id === selectedPhotoId) ?? null : null
+  const modalPhotos = selectedPhoto?.is_hidden ? [selectedPhoto] : normalPhotos
 
   const handleSelectStar = async (id: number) => {
     setIsClosingStack(false)
@@ -461,7 +458,7 @@ export default function App() {
                 title={showLegend ? '收起星图信息' : '查看星群信息'}
               >
                 <Sparkles size={14} color={currentUser?.color || '#f6c177'} />
-                <span>{filterAuthor ? filterAuthor : visiblePhotos.length}</span>
+                <span>{filterAuthor ? filterAuthor : normalPhotos.length}</span>
               </button>
 
               {showLegend && (
@@ -471,7 +468,7 @@ export default function App() {
                     style={{ justifyContent: 'space-between', width: '100%' }}
                   >
                     <span>
-                      {activeCluster ? activeCluster.name : '我的星空'} · {visiblePhotos.length} 颗星
+                      {activeCluster ? activeCluster.name : '我的星空'} · {normalPhotos.length} 颗星
                     </span>
                     <button
                       type="button"
@@ -818,9 +815,9 @@ export default function App() {
       )}
 
       {/* Stacked Photo Deck & Zoomed Chronicler Modal */}
-      {selectedPhotoId !== null && photos.length > 0 && (
+      {selectedPhotoId !== null && modalPhotos.length > 0 && (
         <PhotoStackModal
-          photos={visiblePhotos.some((p) => p.id === selectedPhotoId) ? visiblePhotos : photos}
+          photos={modalPhotos}
           initialPhotoId={selectedPhotoId}
           onStartClose={() => setIsClosingStack(true)}
           onClose={() => {
