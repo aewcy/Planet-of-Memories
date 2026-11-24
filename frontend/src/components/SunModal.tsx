@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Calendar, Camera, Edit3, Send, Sparkles, X } from 'lucide-react'
 import { api, type SunConfig } from '../api'
 import { compressImage } from '../utils/imageCompress'
+import { ImageLightbox } from './ImageLightbox'
 
 interface Props {
   clusterId: number
@@ -28,6 +29,7 @@ export const SunModal: React.FC<Props> = ({
   onClose,
 }) => {
   const hasPhoto = Boolean(sunConfig.photo)
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false)
   const [editing, setEditing] = useState(!hasPhoto)
   const [metAtInput, setMetAtInput] = useState(sunConfig.met_at || '')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -277,7 +279,13 @@ export const SunModal: React.FC<Props> = ({
 
           <div className="zoom-left">
             <div className="zoom-polaroid">
-              <img src={sunConfig.photo!.url} alt="恒星记忆" />
+              <img
+                src={sunConfig.photo!.url}
+                alt="恒星记忆"
+                onClick={() => setImageLightboxOpen(true)}
+                style={{ cursor: 'zoom-in' }}
+                title="点击查看大图"
+              />
               <textarea
                 rows={3}
                 className="zoom-caption-textarea"
@@ -358,6 +366,14 @@ export const SunModal: React.FC<Props> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {imageLightboxOpen && sunConfig.photo && (
+        <ImageLightbox
+          src={sunConfig.photo.url}
+          alt="恒星记忆"
+          onClose={() => setImageLightboxOpen(false)}
+        />
       )}
     </div>
   )

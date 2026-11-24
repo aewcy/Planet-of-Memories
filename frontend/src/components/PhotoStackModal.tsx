@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Send, Sparkles, Trash2, X } from 'lucide-react'
 import { api, type PhotoItem } from '../api'
+import { ImageLightbox } from './ImageLightbox'
 
 interface Props {
   photos: PhotoItem[]
@@ -28,6 +29,7 @@ export const PhotoStackModal: React.FC<Props> = ({
   const [chromeHidden, setChromeHidden] = useState(false)
   const [sideCardsFaded, setSideCardsFaded] = useState(false)
   const [closingModal, setClosingModal] = useState(false)
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false)
 
   // Zoomed detail + Chronicler chat state
   const [detail, setDetail] = useState<PhotoItem | null>(null)
@@ -463,7 +465,15 @@ export const PhotoStackModal: React.FC<Props> = ({
 
           <div className="zoom-left">
             <div ref={zoomPolaroidRef} className="zoom-polaroid">
-              <img src={currentPhoto.url} alt="放大照片" />
+              <img
+                src={currentPhoto.url}
+                alt="放大照片"
+                onClick={() => {
+                  if (zoomPhase === 'zoomed') setImageLightboxOpen(true)
+                }}
+                style={{ cursor: zoomPhase === 'zoomed' ? 'zoom-in' : 'default' }}
+                title="点击查看大图"
+              />
               <textarea
                 rows={3}
                 className="zoom-caption-textarea"
@@ -558,6 +568,14 @@ export const PhotoStackModal: React.FC<Props> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {imageLightboxOpen && currentPhoto && (
+        <ImageLightbox
+          src={currentPhoto.url}
+          alt={currentPhoto.caption || '记忆照片'}
+          onClose={() => setImageLightboxOpen(false)}
+        />
       )}
     </div>
   )
