@@ -74,6 +74,18 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE photos ADD COLUMN in_orbit INTEGER NOT NULL DEFAULT 1"
             )
+        if "is_hidden" not in cols:
+            conn.execute(
+                "ALTER TABLE photos ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0"
+            )
+        if "is_discovered" not in cols:
+            conn.execute(
+                "ALTER TABLE photos ADD COLUMN is_discovered INTEGER NOT NULL DEFAULT 1"
+            )
+        if "surprise_note" not in cols:
+            conn.execute(
+                "ALTER TABLE photos ADD COLUMN surprise_note TEXT NOT NULL DEFAULT ''"
+            )
 
         conn.execute(
             """
@@ -107,6 +119,16 @@ def init_db() -> None:
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_memories (
+                passcode TEXT PRIMARY KEY,
+                summary TEXT NOT NULL DEFAULT '',
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
             )
             """
         )

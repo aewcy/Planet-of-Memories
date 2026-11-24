@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Check, Copy, Lock, Plus, Unlock, X } from 'lucide-react'
+import { Check, Copy, Lock, LogOut, Plus, Unlock, X } from 'lucide-react'
 import { api, type ClusterInfo } from '../api'
 
 type UserClusterItem = ClusterInfo & {
@@ -24,6 +24,7 @@ export const UserClusterModal: React.FC<Props> = ({
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [copiedId, setCopiedId] = useState<number | null>(null)
+  const [confirmLeaveId, setConfirmLeaveId] = useState<number | null>(null)
 
   const load = async () => {
     try {
@@ -73,6 +74,24 @@ export const UserClusterModal: React.FC<Props> = ({
       onClustersChanged()
     } catch (err: any) {
       alert(err.message || '操作失败')
+    }
+  }
+
+  const handleLeave = async (c: UserClusterItem) => {
+    if (confirmLeaveId !== c.id) {
+      setConfirmLeaveId(c.id)
+      return
+    }
+    try {
+      await api.leaveCluster(c.id)
+      setConfirmLeaveId(null)
+      await load()
+      onClustersChanged()
+      if (activeClusterId === c.id) {
+        onSelectCluster(0)
+      }
+    } catch (err: any) {
+      alert(err.message || '退出失败')
     }
   }
 
@@ -180,6 +199,22 @@ export const UserClusterModal: React.FC<Props> = ({
                       title={c.is_active ? '点击封口（暂停邀请）' : '点击开放邀请'}
                     >
                       {c.is_active ? <Unlock size={13} /> : <Lock size={13} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="glass-pill-btn"
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: 12,
+                        color: confirmLeaveId === c.id ? '#f38ba8' : 'var(--text-secondary)',
+                        borderColor:
+                          confirmLeaveId === c.id ? 'rgba(243, 139, 168, 0.5)' : undefined,
+                      }}
+                      onClick={() => handleLeave(c)}
+                      title={confirmLeaveId === c.id ? '再次点击确认退出星系' : '退出该星系'}
+                    >
+                      <LogOut size={13} />
+                      {confirmLeaveId === c.id && <span>确认退出</span>}
                     </button>
                   </div>
                 </div>

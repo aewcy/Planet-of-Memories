@@ -68,6 +68,9 @@ export interface PhotoItem {
   created_at: string
   is_sealed: boolean
   in_orbit?: boolean
+  is_hidden?: boolean
+  is_discovered?: boolean
+  surprise_note?: string
   tilt: number
   author_name: string
   author_color: string
@@ -137,12 +140,16 @@ export const api = {
     takenAt: string,
     caption: string,
     clusterId: number,
-    inOrbit = true
+    inOrbit = true,
+    isHidden = false,
+    surpriseNote = ''
   ) => {
     const form = new FormData()
     form.append('file', file)
     form.append('cluster_id', String(clusterId))
     form.append('in_orbit', String(inOrbit))
+    form.append('is_hidden', String(isHidden))
+    if (surpriseNote) form.append('surprise_note', surpriseNote)
     if (takenAt) form.append('taken_at', takenAt)
     if (caption) form.append('caption', caption)
     return request<PhotoItem>('/api/photos', {
@@ -150,6 +157,11 @@ export const api = {
       body: form,
     })
   },
+
+  discoverPhoto: (id: number) =>
+    request<PhotoItem & { discovered_now?: boolean }>(`/api/photos/${id}/discover`, {
+      method: 'POST',
+    }),
 
   getPhotoDetail: (id: number) => request<PhotoItem>(`/api/photos/${id}`),
 
@@ -214,6 +226,11 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  leaveCluster: (id: number) =>
+    request<{ ok: boolean; left_cluster_id: number }>(`/api/clusters/${id}/leave`, {
+      method: 'POST',
+    }),
+
   setDisplayName: (name: string) =>
     request<AuthorUser>('/api/profile/name', {
       method: 'POST',
@@ -251,4 +268,24 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }),
+
+  fetchUserMemory: () => request<UserMemory>('/api/profile/memory'),
+
+  updateUserMemory: (summary: string) =>
+    request<UserMemory>('/api/profile/memory', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary }),
+    }),
+
+  clearUserMemory: () =>
+    request<UserMemory>('/api/profile/memory', {
+      method: 'DELETE',
+    }),
+}
+
+export interface UserMemory {
+  summary: string
+  turn_count: number
+  updated_at: string
 }

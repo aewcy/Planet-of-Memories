@@ -45,8 +45,11 @@ interface Props {
   stars: Array<PublicStar | PhotoItem>
   unlocked: boolean
   accentColor?: string
+  currentUserName?: string
+  isAdmin?: boolean
   focusedStarId?: number | null
   bornStarId?: number | null
+  discoverBurstId?: number | null
   sunConfig?: SunConfig | null
   otherSystems?: OtherSystem[]
   activeClusterId?: number
@@ -79,8 +82,11 @@ export const StarfieldCanvas: React.FC<Props> = ({
   stars,
   unlocked,
   accentColor = '#f6c177',
+  currentUserName = '',
+  isAdmin = false,
   focusedStarId = null,
   bornStarId = null,
+  discoverBurstId = null,
   sunConfig = null,
   otherSystems = [],
   activeClusterId = 0,
@@ -93,6 +99,20 @@ export const StarfieldCanvas: React.FC<Props> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<StarNode[]>([])
   const dustRef = useRef<BgDust[]>([])
+  const currentUserNameRef = useRef(currentUserName)
+  const isAdminRef = useRef(isAdmin)
+  const discoverBurstRef = useRef<{ id: number; progress: number } | null>(null)
+
+  useEffect(() => {
+    currentUserNameRef.current = currentUserName
+    isAdminRef.current = isAdmin
+  }, [currentUserName, isAdmin])
+
+  useEffect(() => {
+    if (discoverBurstId !== null) {
+      discoverBurstRef.current = { id: discoverBurstId, progress: 0 }
+    }
+  }, [discoverBurstId])
   const mouseRef = useRef<{ x: number; y: number; active: boolean }>({
     x: 0,
     y: 0,
@@ -643,6 +663,98 @@ export const StarfieldCanvas: React.FC<Props> = ({
         const drawX = node.x + (node.x - width * 0.5) * focusBlend * 0.22
         const drawY = node.y + (node.y - height * 0.5) * focusBlend * 0.22
 
+        const isUndiscoveredHidden = Boolean(
+          node.photo?.is_hidden && !node.photo?.is_discovered
+        )
+        const isHiddenOwner = Boolean(
+          isAdminRef.current ||
+            (currentUserNameRef.current &&
+              node.photo?.author_name === currentUserNameRef.current)
+        )
+
+        // Undiscovered hidden star for non-owner: camouflage as dim star + proximity ripple
+        if (isUndiscoveredHidden && !isHiddenOwner) {
+          const proxDist = mouse.active ? Math.hypot(mouse.x - drawX, mouse.y - drawY) : 9999
+          const proximity = Math.max(0, Math.min(1, 1 - proxDist / 115))
+          const twinkle = 0.26 + 0.08 * Math.sin(frame * 0.038 + node.twinklePhase)
+          const camAlpha = Math.min(0.92, (twinkle + proximity * 0.55) * introEase)
+          const camRadius = 1.65 + proximity * 1.45
+
+          if (proximity > 0.05) {
+            const rippleGrad = ctx.createRadialGradient(
+              drawX,
+              drawY,
+              0,
+              drawX,
+              drawY,
+              14 + proximity * 14
+            )
+            rippleGrad.addColorStop(0, hexToRgba(node.color, proximity * 0.55))
+            rippleGrad.addColorStop(1, hexToRgba(node.color, 0))
+            ctx.beginPath()
+            ctx.arc(drawX, drawY, 14 + proximity * 14, 0, Math.PI * 2)
+            ctx.fillStyle = rippleGrad
+            ctx.fill()
+
+            const ripplePhase = ((frame * 0.025 + node.twinklePhase) % 1)
+            ctx.beginPath()
+            ctx.arc(drawX, drawY, 6 + ripplePhase * 22, 0, Math.PI * 2)
+            ctx.strokeStyle = hexToRgba(node.color, (1 - ripplePhase) * proximity * 0.48)
+            ctx.lineWidth = 1
+            ctx.stroke()
+          }
+
+          ctx.beginPath()
+          ctx.arc(drawX, drawY, camRadius, 0, Math.PI * 2)
+          ctx.fillStyle = `rgba(255, 255, 255, ${camAlpha})`
+          ctx.fill()
+          continue
+        }
+
+        // Discovery burst animation when an undiscovered star is just unlocked
+        const burst = discoverBurstRef.current
+        if (burst && burst.id === node.id) {
+          burst.progress = Math.min(1, burst.progress + 0.018)
+          const bpct = burst.progress
+          const easeOut = 1 - Math.pow(1 - bpct, 3)
+          ctx.beginPath()
+          ctx.arc(drawX, drawY, 8 + easeOut * 66, 0, Math.PI * 2)
+          ctx.strokeStyle = hexToRgba(node.color, (1 - bpct) * 0.78)
+          ctx.lineWidth = 1.8 * (1 - bpct * 0.6)
+          ctx.stroke()
+          for (let k = 0; k < 14; k++) {
+            const ang = (k / 14) * Math.PI * 2 + node.twinklePhase
+            const distS = 6 + easeOut * (36 + (k % 3) * 14)
+            ctx.beginPath()
+            ctx.arc(
+              drawX + Math.cos(ang) * distS,
+              drawY + Math.sin(ang) * distS,
+              1.6 * (1 - bpct * 0.5),
+              0,
+              Math.PI * 2
+            )
+            ctx.fillStyle = hexToRgba(node.color, (1 - bpct) * 0.9)
+            ctx.fill()
+          }
+          if (bpct >= 1) {
+            discoverBurstRef.current = null
+          }
+        }
+
+        if (isUndiscoveredHidden && isHiddenOwner) {
+          ctx.save()
+          ctx.setLineDash([3, 4])
+          ctx.beginPath()
+          ctx.arc(drawX, drawY, 14, 0, Math.PI * 2)
+          ctx.strokeStyle = hexToRgba(node.color, isHot ? 0.65 : 0.34)
+          ctx.lineWidth = 1
+          ctx.stroke()
+          ctx.restore()
+        }
+
+        const effectiveDimFactor =
+          isUndiscoveredHidden && isHiddenOwner ? dimFactor * 0.62 : dimFactor
+
         if (node.birthProgress < 1) {
           node.birthProgress = Math.min(1, node.birthProgress + 0.0083)
         }
@@ -678,14 +790,14 @@ export const StarfieldCanvas: React.FC<Props> = ({
           0,
           hexToRgba(
             node.color,
-            Math.min(1, (isHot ? 0.95 : 0.72) * birthAlphaScale) * dimFactor
+            Math.min(1, (isHot ? 0.95 : 0.72) * birthAlphaScale) * effectiveDimFactor
           )
         )
         grad.addColorStop(
           0.35,
           hexToRgba(
             node.color,
-            ((isHot ? 0.36 : 0.18) + igniteFlash * 0.28) * birthAlphaScale * dimFactor
+            ((isHot ? 0.36 : 0.18) + igniteFlash * 0.28) * birthAlphaScale * effectiveDimFactor
           )
         )
         grad.addColorStop(1, hexToRgba(node.color, 0))
@@ -748,7 +860,7 @@ export const StarfieldCanvas: React.FC<Props> = ({
           0,
           Math.PI * 2
         )
-        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, birthAlphaScale) * dimFactor})`
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, birthAlphaScale) * effectiveDimFactor})`
         ctx.fill()
 
         // Subtle cross flare (tight during charge, snaps out during ignition)
@@ -757,7 +869,7 @@ export const StarfieldCanvas: React.FC<Props> = ({
           igniteFlash * 28
         ctx.strokeStyle = hexToRgba(
           node.color,
-          Math.min(1, ((isHot ? 0.75 : 0.35) + igniteFlash * 0.55) * birthAlphaScale) * dimFactor
+          Math.min(1, ((isHot ? 0.75 : 0.35) + igniteFlash * 0.55) * birthAlphaScale) * effectiveDimFactor
         )
         ctx.lineWidth = 1
         ctx.beginPath()
@@ -1122,26 +1234,51 @@ export const StarfieldCanvas: React.FC<Props> = ({
         </div>
       )}
 
-      {unlocked && hovered && hovered.node.photo && (
-        <div
-          className="star-tooltip liquid-glass"
-          style={{ left: hovered.x, top: hovered.y }}
-        >
-          <img src={hovered.node.photo.url} alt="" />
-          <div className="star-tooltip-meta">
-            <span className="star-tooltip-author">
-              <span
-                className="star-dot"
-                style={{ backgroundColor: hovered.node.color }}
-              />
-              {hovered.node.photo.author_name}
-            </span>
-            <span className="star-tooltip-date">
-              {hovered.node.photo.taken_at}
-            </span>
+      {unlocked && hovered && hovered.node.photo && (() => {
+        const hp = hovered.node.photo!
+        const isSecretMystery =
+          Boolean(hp.is_hidden && !hp.is_discovered) &&
+          !isAdmin &&
+          hp.author_name !== currentUserName
+        if (isSecretMystery) {
+          return (
+            <div
+              className="star-tooltip liquid-glass"
+              style={{ left: hovered.x, top: hovered.y, padding: '8px 14px' }}
+            >
+              <div className="star-tooltip-meta">
+                <span className="star-tooltip-author">
+                  <span
+                    className="star-dot"
+                    style={{ backgroundColor: hovered.node.color }}
+                  />
+                  ✦ 藏在夜空里的小惊喜
+                </span>
+              </div>
+            </div>
+          )
+        }
+        return (
+          <div
+            className="star-tooltip liquid-glass"
+            style={{ left: hovered.x, top: hovered.y }}
+          >
+            <img src={hp.url} alt="" />
+            <div className="star-tooltip-meta">
+              <span className="star-tooltip-author">
+                <span
+                  className="star-dot"
+                  style={{ backgroundColor: hovered.node.color }}
+                />
+                {hp.author_name}
+              </span>
+              <span className="star-tooltip-date">
+                {hp.is_hidden && !hp.is_discovered ? '隐藏惊喜 · 等待发现' : hp.taken_at}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </>
   )
 }

@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .ai import generate_chat_reply, generate_initial_greeting, seal_memory_caption
+from .ai import generate_chat_reply, generate_initial_greeting, seal_memory_caption, summarize_user_memory
 from .config import settings
 from .database import get_db, init_db
 
@@ -219,6 +219,84 @@ class ProfileNameRequest(BaseModel):
     name: str
 
 
+class ProfileMemoryRequest(BaseModel):
+    summary: str
+
+
+def _scope_key_for(cluster_id: int, passcode: str) -> str:
+    return f"personal:{passcode}" if cluster_id == 0 else f"cluster:{cluster_id}"
+
+
+def _load_ai_memory_context(
+    conn,
+    passcode: str,
+    cluster_id: int,
+    exclude_photo_id: int = 0,
+) -> Dict[str, object]:
+    mem_row = conn.execute(
+        "SELECT summary, turn_count FROM user_memories WHERE passcode = ?",
+        (passcode,),
+    ).fetchone()
+    user_memory = mem_row["summary"] if mem_row else ""
+    turn_count = int(mem_row["turn_count"]) if mem_row else 0
+
+    scope_key = _scope_key_for(cluster_id, passcode)
+    sun_row = conn.execute(
+        "SELECT met_at FROM sun_configs WHERE scope_key = ?",
+        (scope_key,),
+    ).fetchone()
+    met_at = sun_row["met_at"] if sun_row else ""
+
+    snippet_rows = conn.execute(
+        """
+        SELECT m.content
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        WHERE m.role = 'user'
+          AND p.author_passcode = ?
+          AND p.id != ?
+        ORDER BY m.id DESC
+        LIMIT 4
+        """,
+        (passcode, exclude_photo_id),
+    ).fetchall()
+    recent_chat_snippets = [r["content"] for r in snippet_rows if r["content"].strip()]
+
+    return {
+        "user_memory": user_memory,
+        "turn_count": turn_count,
+        "met_at": met_at,
+        "recent_chat_snippets": recent_chat_snippets,
+    }
+
+
+async def _refresh_user_memory_bg(passcode: str, speaker_name: str, exchange_text: str) -> None:
+    if not passcode:
+        return
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT summary, turn_count FROM user_memories WHERE passcode = ?",
+            (passcode,),
+        ).fetchone()
+        current_memory = row["summary"] if row else ""
+        turn_count = int(row["turn_count"]) if row else 0
+
+    updated = await summarize_user_memory(speaker_name, current_memory, exchange_text)
+    now_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_memories (passcode, summary, turn_count, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(passcode) DO UPDATE SET
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (passcode, updated, turn_count, now_iso),
+        )
+        conn.commit()
+
+
 def _row_to_photo(row) -> dict:
     return {
         "id": row["id"],
@@ -230,6 +308,9 @@ def _row_to_photo(row) -> dict:
         "created_at": row["created_at"],
         "is_sealed": bool(row["is_sealed"]),
         "in_orbit": bool(row["in_orbit"]) if "in_orbit" in row.keys() else True,
+        "is_hidden": bool(row["is_hidden"]) if "is_hidden" in row.keys() else False,
+        "is_discovered": bool(row["is_discovered"]) if "is_discovered" in row.keys() else True,
+        "surprise_note": row["surprise_note"] if "surprise_note" in row.keys() else "",
         "tilt": row["tilt"],
         "author_name": row["author_name"],
         "author_color": row["author_color"],
@@ -378,6 +459,60 @@ def set_profile_name(
     }
 
 
+@app.get("/api/profile/memory")
+def get_profile_memory(user: Dict[str, object] = Depends(get_current_user)) -> dict:
+    passcode = str(user.get("passcode", ""))
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT summary, turn_count, updated_at FROM user_memories WHERE passcode = ?",
+            (passcode,),
+        ).fetchone()
+    if not row:
+        return {"summary": "", "turn_count": 0, "updated_at": ""}
+    return {
+        "summary": row["summary"],
+        "turn_count": int(row["turn_count"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.put("/api/profile/memory")
+def update_profile_memory(
+    body: ProfileMemoryRequest,
+    user: Dict[str, object] = Depends(get_current_user),
+) -> dict:
+    passcode = str(user.get("passcode", ""))
+    summary = body.summary.strip()[:500]
+    now_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT turn_count FROM user_memories WHERE passcode = ?",
+            (passcode,),
+        ).fetchone()
+        turn_count = int(row["turn_count"]) if row else 0
+        conn.execute(
+            """
+            INSERT INTO user_memories (passcode, summary, turn_count, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(passcode) DO UPDATE SET
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (passcode, summary, turn_count, now_iso),
+        )
+        conn.commit()
+    return {"summary": summary, "turn_count": turn_count, "updated_at": now_iso}
+
+
+@app.delete("/api/profile/memory")
+def clear_profile_memory(user: Dict[str, object] = Depends(get_current_user)) -> dict:
+    passcode = str(user.get("passcode", ""))
+    with get_db() as conn:
+        conn.execute("DELETE FROM user_memories WHERE passcode = ?", (passcode,))
+        conn.commit()
+    return {"summary": "", "turn_count": 0, "updated_at": ""}
+
+
 @app.get("/api/clusters")
 def list_my_clusters(user: Dict[str, object] = Depends(get_current_user)) -> list[dict]:
     """List clusters the current user belongs to, including members and invite code."""
@@ -493,6 +628,24 @@ def update_my_cluster(
         )
         conn.commit()
     return {"id": cluster_id, "name": new_name, "is_active": bool(new_active)}
+
+
+@app.post("/api/clusters/{cluster_id}/leave")
+def leave_cluster(
+    cluster_id: int,
+    user: Dict[str, object] = Depends(get_current_user),
+) -> dict:
+    if cluster_id <= 0:
+        raise HTTPException(status_code=400, detail="不能退出个人星空")
+    _ensure_cluster_access(cluster_id, user)
+    passcode = str(user.get("passcode", ""))
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM cluster_members WHERE cluster_id = ? AND passcode = ?",
+            (cluster_id, passcode),
+        )
+        conn.commit()
+    return {"ok": True, "left_cluster_id": cluster_id}
 
 
 @app.get("/api/admin/clusters")
@@ -717,9 +870,22 @@ async def save_sun_config(
                 ),
             )
             photo_id = cur.lastrowid
+            mem_ctx = _load_ai_memory_context(
+                conn, str(user.get("passcode", "")), cluster_id, exclude_photo_id=photo_id
+            )
             conn.commit()
 
-        greeting = await generate_initial_greeting(dest_path, [])
+        greeting = await generate_initial_greeting(
+            dest_path,
+            [],
+            speaker_name=str(user["name"]),
+            user_memory=str(mem_ctx["user_memory"]),
+            turn_count=int(mem_ctx["turn_count"]),
+            recent_chat_snippets=list(mem_ctx["recent_chat_snippets"]),
+            met_at=met_at.strip() or str(mem_ctx["met_at"]),
+            is_sun=True,
+            in_orbit=True,
+        )
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO messages (photo_id, role, content, created_at) VALUES (?, 'assistant', ?, ?)",
@@ -793,6 +959,8 @@ async def upload_photo(
     taken_at: Optional[str] = Form(default=None),
     caption: str = Form(default=""),
     in_orbit: bool = Form(default=True),
+    is_hidden: bool = Form(default=False),
+    surprise_note: str = Form(default=""),
     user: Dict[str, object] = Depends(get_current_user),
 ) -> dict:
     _ensure_cluster_access(cluster_id, user)
@@ -808,6 +976,10 @@ async def upload_photo(
     now_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     effective_taken_at = (taken_at or "").strip() or now_iso[:16].replace("T", " ")
     tilt = round(random.uniform(-2.2, 2.2), 2)
+    clean_surprise = surprise_note.strip()
+    effective_in_orbit = False if is_hidden else in_orbit
+    effective_caption = clean_surprise or caption.strip()
+    is_discovered = 0 if is_hidden else 1
 
     with get_db() as conn:
         recent_rows = conn.execute(
@@ -819,27 +991,47 @@ async def upload_photo(
         cur = conn.execute(
             """
             INSERT INTO photos (
-                cluster_id, filename, caption, taken_at, created_at, is_sealed, tilt, author_name, author_color, author_passcode, in_orbit
+                cluster_id, filename, caption, taken_at, created_at, is_sealed, tilt,
+                author_name, author_color, author_passcode, in_orbit, is_hidden, is_discovered, surprise_note
             )
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cluster_id,
                 unique_name,
-                caption.strip(),
+                effective_caption,
                 effective_taken_at,
                 now_iso,
                 tilt,
                 str(user["name"]),
                 str(user["color"]),
                 str(user.get("passcode", "")),
-                int(in_orbit),
+                int(effective_in_orbit),
+                int(is_hidden),
+                is_discovered,
+                clean_surprise,
             ),
         )
         photo_id = cur.lastrowid
+        mem_ctx = _load_ai_memory_context(
+            conn, str(user.get("passcode", "")), cluster_id, exclude_photo_id=photo_id
+        )
         conn.commit()
 
-    greeting = await generate_initial_greeting(dest_path, recent_captions)
+    if is_hidden and clean_surprise:
+        greeting = f"你找到这颗悄悄藏起来的星星了。里面留了一句话给你：\n「{clean_surprise}」"
+    else:
+        greeting = await generate_initial_greeting(
+            dest_path,
+            recent_captions,
+            speaker_name=str(user["name"]),
+            user_memory=str(mem_ctx["user_memory"]),
+            turn_count=int(mem_ctx["turn_count"]),
+            recent_chat_snippets=list(mem_ctx["recent_chat_snippets"]),
+            met_at=str(mem_ctx["met_at"]),
+            is_sun=False,
+            in_orbit=effective_in_orbit,
+        )
 
     with get_db() as conn:
         conn.execute(
@@ -958,6 +1150,7 @@ def delete_photo(
 async def chat_about_photo(
     photo_id: int,
     body: ChatRequest,
+    background_tasks: BackgroundTasks,
     user: Dict[str, object] = Depends(get_current_user),
 ) -> dict:
     text = body.message.strip()
@@ -965,9 +1158,14 @@ async def chat_about_photo(
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     now_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    passcode = str(user.get("passcode", ""))
+    speaker_name = str(user["name"])
 
     with get_db() as conn:
-        row = conn.execute("SELECT cluster_id, author_passcode, filename FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        row = conn.execute(
+            "SELECT cluster_id, author_passcode, filename, is_sun, in_orbit FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="找不到这张照片")
         _ensure_photo_access(row, user)
@@ -975,6 +1173,16 @@ async def chat_about_photo(
         conn.execute(
             "INSERT INTO messages (photo_id, role, content, created_at) VALUES (?, 'user', ?, ?)",
             (photo_id, text, now_iso),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_memories (passcode, summary, turn_count, updated_at)
+            VALUES (?, '', 1, ?)
+            ON CONFLICT(passcode) DO UPDATE SET
+                turn_count = user_memories.turn_count + 1,
+                updated_at = excluded.updated_at
+            """,
+            (passcode, now_iso),
         )
         conn.commit()
 
@@ -986,12 +1194,29 @@ async def chat_about_photo(
             "SELECT caption FROM photos WHERE cluster_id = ? AND is_sealed = 1 AND id != ? AND caption != '' ORDER BY id DESC LIMIT 5",
             (row["cluster_id"], photo_id),
         ).fetchall()
+        mem_ctx = _load_ai_memory_context(
+            conn, passcode, int(row["cluster_id"]), exclude_photo_id=photo_id
+        )
 
     history = [{"role": r["role"], "content": r["content"]} for r in history_rows]
     recent_captions = [r["caption"] for r in recent_rows]
     image_path = settings.uploads_dir / row["filename"]
 
-    reply = await generate_chat_reply(image_path, history, recent_captions)
+    reply = await generate_chat_reply(
+        image_path,
+        history,
+        recent_captions,
+        speaker_name=speaker_name,
+        user_memory=str(mem_ctx["user_memory"]),
+        turn_count=int(mem_ctx["turn_count"]),
+        recent_chat_snippets=list(mem_ctx["recent_chat_snippets"]),
+        met_at=str(mem_ctx["met_at"]),
+        is_sun=bool(row["is_sun"]),
+        in_orbit=bool(row["in_orbit"]),
+    )
+    if len(text) >= 6:
+        exchange_text = f"{speaker_name}: {text}\n记录者: {reply}"
+        background_tasks.add_task(_refresh_user_memory_bg, passcode, speaker_name, exchange_text)
     reply_iso = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
     with get_db() as conn:
@@ -1047,6 +1272,41 @@ async def seal_photo(
         ).fetchone()
 
     return _row_to_photo(updated)
+
+
+@app.post("/api/photos/{photo_id}/discover")
+def discover_photo(
+    photo_id: int,
+    user: Dict[str, object] = Depends(get_current_user),
+) -> dict:
+    passcode = str(user.get("passcode", ""))
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="找不到这张照片")
+        _ensure_photo_access(row, user)
+
+        is_owner = bool(row["author_passcode"]) and row["author_passcode"] == passcode
+        discovered_now = False
+        if row["is_hidden"] and not row["is_discovered"] and not is_owner:
+            conn.execute("UPDATE photos SET is_discovered = 1 WHERE id = ?", (photo_id,))
+            conn.commit()
+            discovered_now = True
+
+        updated = conn.execute(
+            """
+            SELECT p.*, COUNT(m.id) AS message_count
+            FROM photos p
+            LEFT JOIN messages m ON m.photo_id = p.id
+            WHERE p.id = ?
+            GROUP BY p.id
+            """,
+            (photo_id,),
+        ).fetchone()
+
+    result = _row_to_photo(updated)
+    result["discovered_now"] = discovered_now
+    return result
 
 
 # Serve built frontend in production when frontend/dist exists

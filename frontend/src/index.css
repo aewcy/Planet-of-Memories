@@ -631,28 +631,20 @@ textarea {
   max-width: 980px;
   max-height: 90vh;
   border-radius: 24px;
-  overflow: hidden;
+  overflow: visible;
   display: grid;
   grid-template-columns: 1.05fr 1fr;
   position: relative;
-  animation: zoomPanelEnter 0.82s cubic-bezier(0.22, 1, 0.36, 1);
-  transition: opacity 0.64s ease, transform 0.64s cubic-bezier(0.4, 0, 1, 1);
+  z-index: 50;
+  transition: background-color 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, backdrop-filter 0.32s ease;
 }
 
-.zoom-panel.is-closing {
-  opacity: 0;
-  transform: scale(0.93) translateY(10px);
-}
-
-@keyframes zoomPanelEnter {
-  from {
-    opacity: 0;
-    transform: scale(0.92) translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+.zoom-panel.is-chrome-hidden {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .zoom-left {
@@ -662,7 +654,13 @@ textarea {
   align-items: center;
   justify-content: center;
   background: rgba(5, 8, 18, 0.55);
-  overflow-y: auto;
+  border-radius: 24px 0 0 24px;
+  overflow: visible;
+  transition: background-color 0.32s ease;
+}
+
+.zoom-panel.is-chrome-hidden .zoom-left {
+  background: transparent;
 }
 
 .zoom-polaroid {
@@ -673,18 +671,29 @@ textarea {
   width: 100%;
   max-width: 390px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
-  animation: polaroidExpand 0.88s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center center;
+  will-change: transform;
 }
 
-@keyframes polaroidExpand {
-  from {
-    opacity: 0.4;
-    transform: scale(0.86) translateX(36px);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1) translateX(0);
-  }
+.zoom-chrome-fade {
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.zoom-panel.is-chrome-hidden .zoom-chrome-fade {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.zoom-panel:not(.is-chrome-hidden) .zoom-right {
+  transition: opacity 0.34s ease 0.1s, transform 0.34s cubic-bezier(0.22, 1, 0.36, 1) 0.1s;
+}
+
+.zoom-panel.is-chrome-hidden .zoom-right {
+  opacity: 0;
+  transform: translateX(14px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  pointer-events: none;
 }
 
 .zoom-polaroid img {

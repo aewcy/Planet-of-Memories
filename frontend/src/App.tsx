@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Camera, LogOut, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { BookOpen, Camera, LogOut, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import {
   api,
   type AuthorUser,
@@ -14,11 +14,14 @@ import {
 } from './api'
 import { AdminPanelModal } from './components/AdminPanelModal'
 import { CustomCursor } from './components/CustomCursor'
+import { MemoryModal } from './components/MemoryModal'
 import { PhotoStackModal } from './components/PhotoStackModal'
 import { StarfieldCanvas } from './components/StarfieldCanvas'
 import { SunModal } from './components/SunModal'
 import { UserClusterModal } from './components/UserClusterModal'
 import { compressImage } from './utils/imageCompress'
+
+const ACTIVE_CLUSTER_STORAGE_KEY = 'planet_active_cluster_id'
 
 const AMBIENT_ENTRY_STARS: PublicStar[] = [
   { id: -1, taken_at: '2026-01-01', author_color: '#89b4fa' },
@@ -62,6 +65,7 @@ export default function App() {
   const [filterAuthor, setFilterAuthor] = useState<string | null>(null)
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [showClusterModal, setShowClusterModal] = useState(false)
+  const [showMemoryModal, setShowMemoryModal] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [savingName, setSavingName] = useState(false)
 
@@ -71,6 +75,9 @@ export default function App() {
   const [previewUrl, setPreviewUrl] = useState('')
   const [takenAtInput, setTakenAtInput] = useState(formatLocalDateTimeInput())
   const [inOrbitInput, setInOrbitInput] = useState(true)
+  const [isHiddenInput, setIsHiddenInput] = useState(false)
+  const [surpriseNoteInput, setSurpriseNoteInput] = useState('')
+  const [discoverBurstId, setDiscoverBurstId] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
 
   const applyAuthResult = (res: {
@@ -80,8 +87,13 @@ export default function App() {
   }) => {
     setCurrentUser(res.user)
     setClusters(res.clusters)
+    const rawSaved = window.localStorage.getItem(ACTIVE_CLUSTER_STORAGE_KEY)
+    const savedId = rawSaved !== null && rawSaved !== '' ? Number(rawSaved) : NaN
+    const hasSavedAccess =
+      Number.isInteger(savedId) &&
+      (savedId === 0 || res.clusters.some((c) => c.id === savedId))
     const targetClusterId =
-      res.invited_cluster_id ?? res.clusters[0]?.id ?? 0
+      res.invited_cluster_id ?? (hasSavedAccess ? savedId : res.clusters[0]?.id ?? 0)
     setActiveClusterId(targetClusterId)
     setUnlocked(true)
   }
@@ -135,6 +147,7 @@ export default function App() {
 
   useEffect(() => {
     if (unlocked) {
+      window.localStorage.setItem(ACTIVE_CLUSTER_STORAGE_KEY, String(activeClusterId))
       loadPhotos(activeClusterId)
     }
   }, [unlocked, activeClusterId])
@@ -173,6 +186,7 @@ export default function App() {
 
   const handleSwitchIdentity = () => {
     clearPasscode()
+    window.localStorage.removeItem(ACTIVE_CLUSTER_STORAGE_KEY)
     setUnlocked(false)
     setShowLoginGate(false)
     setCurrentUser(null)
@@ -220,12 +234,16 @@ export default function App() {
         formattedTime,
         '',
         activeClusterId,
-        inOrbitInput
+        isHiddenInput ? false : inOrbitInput,
+        isHiddenInput,
+        isHiddenInput ? surpriseNoteInput.trim() : ''
       )
       setShowUpload(false)
       setSelectedFile(null)
       setPreviewUrl('')
       setInOrbitInput(true)
+      setIsHiddenInput(false)
+      setSurpriseNoteInput('')
       setBornStarId(created.id)
       await loadPhotos(activeClusterId)
     } catch (err: any) {
@@ -249,6 +267,38 @@ export default function App() {
 
   const entryStars = publicStars.length > 0 ? publicStars : AMBIENT_ENTRY_STARS
 
+  const isStarVisibleInHud = (p: PhotoItem) =>
+    !p.is_hidden ||
+    Boolean(p.is_discovered) ||
+    p.author_name === currentUser?.name ||
+    Boolean(currentUser?.is_admin)
+
+  const visiblePhotos = photos.filter(isStarVisibleInHud)
+
+  const handleSelectStar = async (id: number) => {
+    setIsClosingStack(false)
+    const target = photos.find((p) => p.id === id)
+    if (
+      target?.is_hidden &&
+      !target.is_discovered &&
+      target.author_name !== currentUser?.name &&
+      !currentUser?.is_admin
+    ) {
+      setDiscoverBurstId(id)
+      try {
+        const updated = await api.discoverPhoto(id)
+        setPhotos((prev) => prev.map((p) => (p.id === id ? updated : p)))
+      } catch (err) {
+        console.error(err)
+      }
+      window.setTimeout(() => {
+        setSelectedPhotoId(id)
+      }, 340)
+      return
+    }
+    setSelectedPhotoId(id)
+  }
+
   return (
     <div
       className="starfield-stage"
@@ -263,17 +313,17 @@ export default function App() {
         stars={unlocked ? photos : entryStars}
         unlocked={unlocked}
         accentColor={currentUser?.color || '#f6c177'}
+        currentUserName={currentUser?.name}
+        isAdmin={Boolean(currentUser?.is_admin)}
         focusedStarId={isClosingStack ? null : selectedPhotoId}
         bornStarId={bornStarId}
+        discoverBurstId={discoverBurstId}
         sunConfig={sunConfig}
         otherSystems={otherSystems}
         activeClusterId={activeClusterId}
         nebulaOpacity={config?.effects?.nebula_opacity ?? 1.0}
         filterAuthor={config?.effects?.allow_author_filter ? filterAuthor : null}
-        onSelectStar={(id) => {
-          setIsClosingStack(false)
-          setSelectedPhotoId(id)
-        }}
+        onSelectStar={handleSelectStar}
         onSelectSun={() => setShowSunModal(true)}
         onSwitchCluster={(id) => {
           setActiveClusterId(id)
@@ -390,7 +440,7 @@ export default function App() {
                 title={showLegend ? '收起星图信息' : '查看星群信息'}
               >
                 <Sparkles size={14} color={currentUser?.color || '#f6c177'} />
-                <span>{filterAuthor ? filterAuthor : photos.length}</span>
+                <span>{filterAuthor ? filterAuthor : visiblePhotos.length}</span>
               </button>
 
               {showLegend && (
@@ -400,7 +450,7 @@ export default function App() {
                     style={{ justifyContent: 'space-between', width: '100%' }}
                   >
                     <span>
-                      {activeCluster ? activeCluster.name : '我的星空'} · {photos.length} 颗星
+                      {activeCluster ? activeCluster.name : '我的星空'} · {visiblePhotos.length} 颗星
                     </span>
                     <button
                       type="button"
@@ -530,6 +580,14 @@ export default function App() {
                 }}
               >
                 <span>{config.effects?.upload_label || '拾光入星'}</span>
+              </button>
+              <button
+                className="glass-pill-btn"
+                style={{ padding: '10px 12px' }}
+                onClick={() => setShowMemoryModal(true)}
+                title="记录者对你的印象"
+              >
+                <BookOpen size={15} />
               </button>
               {currentUser?.is_admin && (
                 <button
@@ -662,22 +720,69 @@ export default function App() {
                   borderRadius: 14,
                   background: 'rgba(255,255,255,0.04)',
                   border: '1px solid rgba(255,255,255,0.12)',
-                  cursor: 'pointer',
+                  cursor: isHiddenInput ? 'not-allowed' : 'pointer',
+                  opacity: isHiddenInput ? 0.55 : 1,
                   fontSize: 13,
                 }}
               >
                 <div>
                   <div>在星系内旋转</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    关闭则在外环深空缓缓漂流
+                    {isHiddenInput ? '隐藏惊喜星默认静静藏在外环深空' : '关闭则在外环深空缓缓漂流'}
                   </div>
                 </div>
                 <input
                   type="checkbox"
-                  checked={inOrbitInput}
+                  checked={isHiddenInput ? false : inOrbitInput}
+                  disabled={isHiddenInput}
                   onChange={(e) => setInOrbitInput(e.target.checked)}
                 />
               </label>
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: 14,
+                  background: isHiddenInput ? 'rgba(246, 193, 119, 0.08)' : 'rgba(255,255,255,0.04)',
+                  border: isHiddenInput
+                    ? '1px solid rgba(246, 193, 119, 0.35)'
+                    : '1px solid rgba(255,255,255,0.12)',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                <div>
+                  <div>设为隐藏惊喜星</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                    伪装成微弱星尘，指针靠近时会悄悄闪烁回应
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isHiddenInput}
+                  onChange={(e) => setIsHiddenInput(e.target.checked)}
+                />
+              </label>
+
+              {isHiddenInput && (
+                <textarea
+                  rows={3}
+                  className="glass-input"
+                  placeholder="写一句藏在星星里的悄悄话（对方找到并点开时会看到）…"
+                  value={surpriseNoteInput}
+                  onChange={(e) => setSurpriseNoteInput(e.target.value)}
+                  style={{
+                    borderRadius: 14,
+                    padding: '10px 14px',
+                    resize: 'vertical',
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                  }}
+                />
+              )}
 
               <button
                 type="submit"
@@ -694,7 +799,7 @@ export default function App() {
       {/* Stacked Photo Deck & Zoomed Chronicler Modal */}
       {selectedPhotoId !== null && photos.length > 0 && (
         <PhotoStackModal
-          photos={photos}
+          photos={visiblePhotos.some((p) => p.id === selectedPhotoId) ? visiblePhotos : photos}
           initialPhotoId={selectedPhotoId}
           onStartClose={() => setIsClosingStack(true)}
           onClose={() => {
@@ -733,6 +838,14 @@ export default function App() {
           }}
           onClustersChanged={refreshClustersForUser}
           onClose={() => setShowClusterModal(false)}
+        />
+      )}
+
+      {/* User Memory Viewer & Editor Modal */}
+      {showMemoryModal && (
+        <MemoryModal
+          userName={currentUser?.name || '我'}
+          onClose={() => setShowMemoryModal(false)}
         />
       )}
 

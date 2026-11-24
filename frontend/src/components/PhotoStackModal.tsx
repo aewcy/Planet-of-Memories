@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Send, Sparkles, Trash2, X } from 'lucide-react'
 import { api, type PhotoItem } from '../api'
 
@@ -24,8 +24,9 @@ export const PhotoStackModal: React.FC<Props> = ({
     photos.findIndex((p) => p.id === initialPhotoId)
   )
   const [currentIndex, setCurrentIndex] = useState(initialIdx)
-  const [zoomed, setZoomed] = useState(false)
-  const [closingZoom, setClosingZoom] = useState(false)
+  const [zoomPhase, setZoomPhase] = useState<'stack' | 'expanding' | 'zoomed' | 'collapsing'>('stack')
+  const [chromeHidden, setChromeHidden] = useState(false)
+  const [sideCardsFaded, setSideCardsFaded] = useState(false)
   const [closingModal, setClosingModal] = useState(false)
 
   // Zoomed detail + Chronicler chat state
@@ -38,8 +39,22 @@ export const PhotoStackModal: React.FC<Props> = ({
   const lastWheelRef = useRef(0)
   const touchStartXRef = useRef<number | null>(null)
   const chatEndRef = useRef<HTMLDivElement | null>(null)
+  const activeCardRef = useRef<HTMLDivElement | null>(null)
+  const zoomPolaroidRef = useRef<HTMLDivElement | null>(null)
+  const flipFromRectRef = useRef<DOMRect | null>(null)
+  const phaseTimerRef = useRef<number | null>(null)
 
+  const zoomed = zoomPhase !== 'stack'
   const currentPhoto = photos[currentIndex]
+
+  const clearPhaseTimer = () => {
+    if (phaseTimerRef.current !== null) {
+      window.clearTimeout(phaseTimerRef.current)
+      phaseTimerRef.current = null
+    }
+  }
+
+  useEffect(() => () => clearPhaseTimer(), [])
 
   const goPrev = () => {
     setCurrentIndex((i) => (i > 0 ? i - 1 : photos.length - 1))
@@ -49,14 +64,87 @@ export const PhotoStackModal: React.FC<Props> = ({
     setCurrentIndex((i) => (i < photos.length - 1 ? i + 1 : 0))
   }
 
-  const exitZoom = () => {
-    if (!zoomed || closingZoom) return
-    setClosingZoom(true)
-    setTimeout(() => {
-      setZoomed(false)
-      setClosingZoom(false)
-    }, 620)
+  const enterZoom = () => {
+    if (zoomPhase !== 'stack') return
+    clearPhaseTimer()
+    flipFromRectRef.current = activeCardRef.current?.getBoundingClientRect() ?? null
+    setChromeHidden(true)
+    setSideCardsFaded(false)
+    setZoomPhase('expanding')
+    phaseTimerRef.current = window.setTimeout(() => {
+      setZoomPhase('zoomed')
+      setSideCardsFaded(false)
+    }, 480)
   }
+
+  const exitZoom = () => {
+    if (zoomPhase !== 'zoomed' && zoomPhase !== 'expanding') return
+    clearPhaseTimer()
+    flipFromRectRef.current = zoomPolaroidRef.current?.getBoundingClientRect() ?? null
+    setChromeHidden(true)
+    setSideCardsFaded(true)
+    setZoomPhase('collapsing')
+    phaseTimerRef.current = window.setTimeout(() => {
+      if (zoomPolaroidRef.current) {
+        zoomPolaroidRef.current.style.transition = ''
+        zoomPolaroidRef.current.style.transform = ''
+      }
+      setZoomPhase('stack')
+      setChromeHidden(false)
+      setSideCardsFaded(false)
+    }, 460)
+  }
+
+  useLayoutEffect(() => {
+    if (zoomPhase === 'expanding') {
+      const targetEl = zoomPolaroidRef.current
+      const fromRect = flipFromRectRef.current
+      if (targetEl && fromRect) {
+        const toRect = targetEl.getBoundingClientRect()
+        const dx = fromRect.left + fromRect.width / 2 - (toRect.left + toRect.width / 2)
+        const dy = fromRect.top + fromRect.height / 2 - (toRect.top + toRect.height / 2)
+        const scale = toRect.width > 0 ? fromRect.width / toRect.width : 1
+        targetEl.style.transition = 'none'
+        targetEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${scale})`
+        void targetEl.offsetWidth
+        requestAnimationFrame(() => {
+          if (!zoomPolaroidRef.current) return
+          zoomPolaroidRef.current.style.transition =
+            'transform 0.48s cubic-bezier(0.22, 1, 0.36, 1)'
+          zoomPolaroidRef.current.style.transform = 'translate3d(0, 0, 0) scale(1)'
+          setChromeHidden(false)
+          setSideCardsFaded(true)
+        })
+      } else {
+        requestAnimationFrame(() => {
+          setChromeHidden(false)
+          setSideCardsFaded(true)
+        })
+      }
+    } else if (zoomPhase === 'collapsing') {
+      const movingEl = zoomPolaroidRef.current
+      const targetCard = activeCardRef.current
+      const fromRect = flipFromRectRef.current
+      if (movingEl && targetCard && fromRect) {
+        const toRect = targetCard.getBoundingClientRect()
+        const dx = toRect.left + toRect.width / 2 - (fromRect.left + fromRect.width / 2)
+        const dy = toRect.top + toRect.height / 2 - (fromRect.top + fromRect.height / 2)
+        const scale = fromRect.width > 0 ? toRect.width / fromRect.width : 1
+        movingEl.style.transition = 'none'
+        movingEl.style.transform = 'translate3d(0, 0, 0) scale(1)'
+        void movingEl.offsetWidth
+        requestAnimationFrame(() => {
+          if (!zoomPolaroidRef.current) return
+          zoomPolaroidRef.current.style.transition =
+            'transform 0.46s cubic-bezier(0.22, 1, 0.36, 1)'
+          zoomPolaroidRef.current.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${scale})`
+          setSideCardsFaded(false)
+        })
+      } else {
+        requestAnimationFrame(() => setSideCardsFaded(false))
+      }
+    }
+  }, [zoomPhase])
 
   const exitModal = () => {
     if (closingModal) return
@@ -80,7 +168,7 @@ export const PhotoStackModal: React.FC<Props> = ({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [zoomed, closingZoom, closingModal, photos.length])
+  }, [zoomPhase, closingModal, photos.length])
 
   // Load full detail & messages when zoomed
   useEffect(() => {
@@ -200,7 +288,9 @@ export const PhotoStackModal: React.FC<Props> = ({
       if (photos.length <= 1) {
         onClose()
       } else {
-        setZoomed(false)
+        setZoomPhase('stack')
+        setChromeHidden(false)
+        setSideCardsFaded(false)
         setCurrentIndex((i) => (i >= photos.length - 1 ? 0 : i))
       }
     } catch (err: any) {
@@ -210,21 +300,37 @@ export const PhotoStackModal: React.FC<Props> = ({
 
   if (!currentPhoto) return null
 
+  const showStack = zoomPhase !== 'zoomed'
+  const showZoom = zoomPhase !== 'stack'
+  const isTransitioning = zoomPhase === 'expanding' || zoomPhase === 'collapsing'
+
   return (
     <div
       className={`modal-backdrop ${closingModal ? 'is-closing' : ''}`}
       onWheel={handleWheel}
       onClick={() => (zoomed ? exitZoom() : exitModal())}
     >
-      {!zoomed ? (
+      {showStack && (
         <>
           <div
             className={`stack-stage ${closingModal ? 'is-closing' : ''}`}
+            style={
+              isTransitioning
+                ? {
+                    position: 'fixed',
+                    inset: 0,
+                    margin: 'auto',
+                    pointerEvents: 'none',
+                    zIndex: 42,
+                  }
+                : undefined
+            }
             onTouchStart={(e) => {
+              if (isTransitioning) return
               touchStartXRef.current = e.touches[0]?.clientX ?? null
             }}
             onTouchEnd={(e) => {
-              if (touchStartXRef.current === null || photos.length <= 1) return
+              if (isTransitioning || touchStartXRef.current === null || photos.length <= 1) return
               const endX = e.changedTouches[0]?.clientX ?? touchStartXRef.current
               const diff = endX - touchStartXRef.current
               touchStartXRef.current = null
@@ -245,23 +351,35 @@ export const PhotoStackModal: React.FC<Props> = ({
 
               const isActive = offset === 0
               const stepX = typeof window !== 'undefined' && window.innerWidth < 560 ? 26 : 56
-              const translateX = offset * stepX
+              const spreadX = sideCardsFaded && !isActive ? offset * 18 : 0
+              const translateX = offset * stepX + spreadX
               const translateY = Math.abs(offset) * 10
               const scale = 1 - Math.abs(offset) * 0.08
               const rotate = offset * 4.5
               const zIndex = 10 - Math.abs(offset)
-              const opacity = isActive ? 1 : 0.65 - Math.abs(offset) * 0.18
+              const baseOpacity = isActive ? 1 : 0.65 - Math.abs(offset) * 0.18
+              const opacity = isActive
+                ? isTransitioning
+                  ? 0
+                  : 1
+                : sideCardsFaded
+                  ? 0
+                  : baseOpacity
 
               return (
                 <div
                   key={photo.id}
+                  ref={isActive ? activeCardRef : undefined}
                   className="stack-card"
                   style={{
                     zIndex,
                     opacity,
                     transform: `translate(${translateX}px, ${translateY}px) scale(${scale}) rotate(${rotate}deg)`,
                     filter: isActive ? 'none' : 'brightness(0.75)',
-                    pointerEvents: isActive ? 'auto' : 'none',
+                    pointerEvents: isActive && !isTransitioning ? 'auto' : 'none',
+                    transition: isTransitioning
+                      ? 'opacity 0.28s ease, transform 0.34s cubic-bezier(0.22, 1, 0.36, 1)'
+                      : undefined,
                   }}
                   onClick={isActive ? (e) => e.stopPropagation() : undefined}
                 >
@@ -279,7 +397,7 @@ export const PhotoStackModal: React.FC<Props> = ({
                         <div
                           className="stack-zone"
                           data-cursor="zoom"
-                          onClick={() => setZoomed(true)}
+                          onClick={enterZoom}
                           title="放大"
                         />
                         <div
@@ -313,7 +431,7 @@ export const PhotoStackModal: React.FC<Props> = ({
           </div>
 
           <div
-            className={`stack-controls-bar ${closingModal ? 'is-closing' : ''}`}
+            className={`stack-controls-bar ${closingModal || sideCardsFaded ? 'is-closing' : ''}`}
             onClick={(e) => e.stopPropagation()}
           >
             <span className="liquid-glass" style={{ padding: '7px 14px', borderRadius: 999, fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -321,13 +439,15 @@ export const PhotoStackModal: React.FC<Props> = ({
             </span>
           </div>
         </>
-      ) : (
+      )}
+
+      {showZoom && (
         <div
-          className={`zoom-panel liquid-glass ${closingZoom ? 'is-closing' : ''}`}
+          className={`zoom-panel liquid-glass ${chromeHidden ? 'is-chrome-hidden' : ''}`}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            className="glass-pill-btn"
+            className="glass-pill-btn zoom-chrome-fade"
             style={{
               position: 'absolute',
               top: 14,
@@ -342,7 +462,7 @@ export const PhotoStackModal: React.FC<Props> = ({
           </button>
 
           <div className="zoom-left">
-            <div className="zoom-polaroid">
+            <div ref={zoomPolaroidRef} className="zoom-polaroid">
               <img src={currentPhoto.url} alt="放大照片" />
               <textarea
                 rows={3}
@@ -364,7 +484,10 @@ export const PhotoStackModal: React.FC<Props> = ({
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <div
+              className="zoom-chrome-fade"
+              style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' }}
+            >
               <button
                 className="glass-pill-btn"
                 onClick={handleSealMemory}
